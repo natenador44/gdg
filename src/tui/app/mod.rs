@@ -12,10 +12,9 @@ use ratatui::{
     crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Text},
     widgets::{Block, Borders, Paragraph},
 };
-use tracing::debug;
 use tui_textarea::TextArea;
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
@@ -132,6 +131,26 @@ impl App {
                         .search_area
                         .move_cursor(tui_textarea::CursorMove::Head);
                     state.search_area.delete_line_by_end();
+
+                    if !state.tree_state.selected().is_empty() {
+                        state.tree_state.scroll_selected_into_view();
+                    }
+                }
+            }
+            Message::ApplySearch => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.focus = Focus::Tree;
+                    state.expand_all_nodes = true;
+                }
+            }
+            Message::CollapseAll => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    close_all_items(&mut state.tree_state);
+                }
+            }
+            Message::ExpandAll => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.expand_all_nodes = true;
                 }
             }
         }
@@ -183,7 +202,7 @@ impl App {
                             return Ok(Some(Message::SelectAllSearchText));
                         }
                         KeyCode::Enter => {
-                            return Ok(Some(Message::FocusTree));
+                            return Ok(Some(Message::ApplySearch));
                         }
                         _ => {
                             if let AppState::Running(state) = &mut self.app_state {
@@ -221,6 +240,9 @@ impl App {
                         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             Ok(Some(Message::FocusSearch))
                         }
+                        KeyCode::Char('z') => Ok(Some(Message::ExpandAll)),
+                        KeyCode::Char('Z') => Ok(Some(Message::CollapseAll)),
+                        KeyCode::Esc => Ok(Some(Message::ClearSearch)),
                         _ => Ok(None),
                     },
                     _ => Ok(None),
@@ -236,10 +258,6 @@ impl App {
 
 fn dep_tree_focused(app_state: &AppState) -> bool {
     matches!(app_state, AppState::Running(state) if state.focus == Focus::Tree)
-}
-
-fn search_focused(app_state: &AppState) -> bool {
-    matches!(app_state, AppState::Running(state) if state.focus == Focus::Search)
 }
 
 fn render_main_view(frame: &mut Frame<'_>, state: &mut RunningState) {
@@ -394,6 +412,11 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
         build_filtered_tree_item_for_parent(&tg, &state.search_area.lines()[0].to_lowercase())
     };
 
+    if state.expand_all_nodes {
+        state.expand_all_nodes = false;
+        open_all_items(&mut state.tree_state, &roots);
+    }
+
     let tree = Tree::new(&roots)
         .expect("all identifiers are unique")
         .highlight_style(Style::new().bg(Color::Blue))
@@ -406,20 +429,30 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
     frame.render_stateful_widget(tree, split[2], &mut state.tree_state);
 }
 
+fn open_all_items(state: &mut TreeState<NodeIdx>, items: &[TreeItem<'_, NodeIdx>]) {
+    for item in items {
+        state.open(vec![*item.identifier()]);
+    }
+}
+
+fn close_all_items(state: &mut TreeState<NodeIdx>) {
+    state.close_all();
+}
+
 fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
     let menu = match state.focus {
         Focus::Search => {
-            let mut search_menu = String::from("⏎ - apply text filter ctrl-a - select all");
+            let mut search_menu = String::from("⏎ => apply text filter ctrl-a => select all");
             if state.search_area.is_empty() {
-                search_menu += ", Esc - focus dependency tree";
+                search_menu += ", Esc => focus dependency tree";
             } else {
-                search_menu += ", Esc - clear filter";
+                search_menu += ", Esc => clear filter";
             }
             search_menu
         }
         Focus::Tree => {
             let mut context_menu_text = String::from(
-                "q - quit, /|ctrl-f - search, j|↓ - select next, k|↑ - select previous",
+                "q => quit, /|ctrl f => search, j|↓ => select next, k|↑ => select previous, z => expand all, Z => collapse all",
             );
 
             if !state.tree_state.selected().is_empty() {
@@ -427,7 +460,7 @@ fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
                 let selected = state.tree_state.selected()[state.tree_state.selected().len() - 1];
 
                 if graph.node_has_dependencies(selected) {
-                    context_menu_text += ", space|⏎ - toggle open on selected"
+                    context_menu_text += ", space|⏎ => toggle open on selected"
                 }
 
                 if state
@@ -439,8 +472,12 @@ fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
                     .next()
                     .is_some()
                 {
-                    context_menu_text += ", s - go to sub tree"
+                    context_menu_text += ", s => go to sub tree"
                 }
+            }
+
+            if !state.search_area.is_empty() {
+                context_menu_text += ", Esc => clear search filter"
             }
             context_menu_text
         }
@@ -480,7 +517,7 @@ fn build_filtered_tree_item_for_parent<'a>(
         if dep_display.to_lowercase().contains(filter) {
             let item = TreeItem::new(
                 c.idx,
-                dep_display,
+                Text::styled(dep_display, Style::new().bg(Color::Green)),
                 build_filtered_tree_item_for_parent(&tg.traverse_to_node(c.idx), filter),
             )
             .expect("tree item created successfully");
@@ -536,6 +573,9 @@ pub enum Message {
     FocusTree,
     SelectAllSearchText,
     ClearSearch,
+    ApplySearch,
+    CollapseAll,
+    ExpandAll,
 }
 
 enum LoadState {
@@ -548,6 +588,7 @@ struct RunningState {
     tree_state: TreeState<NodeIdx>,
     search_area: TextArea<'static>,
     focus: Focus,
+    expand_all_nodes: bool,
 }
 
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
@@ -564,6 +605,7 @@ impl RunningState {
             tree_state: TreeState::default(),
             search_area: TextArea::default(),
             focus: Focus::default(),
+            expand_all_nodes: false,
         }
     }
 }
