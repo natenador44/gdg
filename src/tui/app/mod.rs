@@ -126,6 +126,14 @@ impl App {
                     state.search_area.select_all();
                 }
             }
+            Message::ClearSearch => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state
+                        .search_area
+                        .move_cursor(tui_textarea::CursorMove::Head);
+                    state.search_area.delete_line_by_end();
+                }
+            }
         }
     }
 
@@ -156,14 +164,26 @@ impl App {
     pub fn handle_event(&mut self) -> Result<Option<Message>> {
         if event::poll(Duration::from_millis(150))? {
             let evt = event::read()?;
-            if search_focused(&self.app_state) {
+            if let AppState::Running(RunningState {
+                search_area, focus, ..
+            }) = &self.app_state
+                && focus == &Focus::Search
+            {
                 if let Event::Key(key) = &evt
                     && key.kind == KeyEventKind::Press
                 {
                     match key.code {
-                        KeyCode::Esc => return Ok(Some(Message::FocusTree)),
+                        KeyCode::Esc if !search_area.is_empty() => {
+                            return Ok(Some(Message::ClearSearch));
+                        }
+                        KeyCode::Esc => {
+                            return Ok(Some(Message::FocusTree));
+                        }
                         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(Some(Message::SelectAllSearchText));
+                        }
+                        KeyCode::Enter => {
+                            return Ok(Some(Message::FocusTree));
                         }
                         _ => {
                             if let AppState::Running(state) = &mut self.app_state {
@@ -368,7 +388,11 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
     );
 
     let tg = state.graph.traversable_from_root();
-    let roots = build_tree_item_for_parent(&tg);
+    let roots = if state.search_area.is_empty() {
+        build_tree_item_for_parent(&tg)
+    } else {
+        build_filtered_tree_item_for_parent(&tg, &state.search_area.lines()[0].to_lowercase())
+    };
 
     let tree = Tree::new(&roots)
         .expect("all identifiers are unique")
@@ -384,7 +408,15 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
 
 fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
     let menu = match state.focus {
-        Focus::Search => String::from("Esc - focus depenency tree, ctrl-a - select all"),
+        Focus::Search => {
+            let mut search_menu = String::from("⏎ - apply text filter ctrl-a - select all");
+            if state.search_area.is_empty() {
+                search_menu += ", Esc - focus dependency tree";
+            } else {
+                search_menu += ", Esc - clear filter";
+            }
+            search_menu
+        }
         Focus::Tree => {
             let mut context_menu_text = String::from(
                 "q - quit, /|ctrl-f - search, j|↓ - select next, k|↑ - select previous",
@@ -436,6 +468,37 @@ fn build_tree_item_for_parent<'a>(graph: &TraversableGraph<'a>) -> Vec<TreeItem<
     children
 }
 
+fn build_filtered_tree_item_for_parent<'a>(
+    tg: &TraversableGraph<'a>,
+    filter: &str,
+) -> Vec<TreeItem<'a, NodeIdx>> {
+    let mut nodes = Vec::new();
+
+    for c in tg.nodes_with_relationship(Relationship::Dependency) {
+        let dep_display = c.dependency.id.to_string();
+
+        if dep_display.to_lowercase().contains(filter) {
+            let item = TreeItem::new(
+                c.idx,
+                dep_display,
+                build_filtered_tree_item_for_parent(&tg.traverse_to_node(c.idx), filter),
+            )
+            .expect("tree item created successfully");
+
+            nodes.push(item);
+        } else {
+            let children = build_filtered_tree_item_for_parent(&tg.traverse_to_node(c.idx), filter);
+            if !children.is_empty() {
+                let item = TreeItem::new(c.idx, dep_display, children)
+                    .expect("tree item created successfully");
+                nodes.push(item);
+            }
+        }
+    }
+
+    nodes
+}
+
 fn load_in_background(dep_file: PathBuf, root_name: String) -> AppState {
     let (tx, rx) = channel();
     thread::spawn(move || {
@@ -472,6 +535,7 @@ pub enum Message {
     FocusSearch,
     FocusTree,
     SelectAllSearchText,
+    ClearSearch,
 }
 
 enum LoadState {
