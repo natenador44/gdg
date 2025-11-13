@@ -16,6 +16,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use tracing::debug;
+use tui_textarea::TextArea;
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 use crate::{
@@ -49,23 +50,23 @@ impl App {
             }
             Message::SelectNext => {
                 if let AppState::Running(state) = &mut self.app_state {
-                    state.view_state.key_down();
+                    state.tree_state.key_down();
                 }
             }
             Message::SelectPrev => {
                 if let AppState::Running(state) = &mut self.app_state {
-                    state.view_state.key_up();
+                    state.tree_state.key_up();
                 }
             }
             Message::ToggleOpenOnSelected => {
                 if let AppState::Running(state) = &mut self.app_state {
-                    state.view_state.toggle_selected();
+                    state.tree_state.toggle_selected();
                 }
             }
             Message::GoToSubtree => {
                 if let AppState::Running(state) = &mut self.app_state {
                     let selected_idx =
-                        state.view_state.selected()[state.view_state.selected().len() - 1];
+                        state.tree_state.selected()[state.tree_state.selected().len() - 1];
                     let node = state
                         .graph
                         .adj_nodes_with_relationship(selected_idx, Relationship::SubtreeFoundHere)
@@ -89,25 +90,40 @@ impl App {
                     tree_id.reverse();
 
                     for i in 0..tree_id.len() - 1 {
-                        state.view_state.open(tree_id[0..=i].to_vec());
+                        state.tree_state.open(tree_id[0..=i].to_vec());
                     }
 
-                    state.view_state.select(tree_id);
-                    state.view_state.scroll_selected_into_view();
+                    state.tree_state.select(tree_id);
+                    state.tree_state.scroll_selected_into_view();
                 }
             }
             Message::PageDown => {
                 if let AppState::Running(state) = &mut self.app_state {
                     state
-                        .view_state
+                        .tree_state
                         .select_relative(|mut current| current.get_or_insert(0).saturating_add(25));
                 }
             }
             Message::PageUp => {
                 if let AppState::Running(state) = &mut self.app_state {
                     state
-                        .view_state
+                        .tree_state
                         .select_relative(|mut current| current.get_or_insert(0).saturating_sub(25));
+                }
+            }
+            Message::FocusSearch => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.focus = Focus::Search;
+                }
+            }
+            Message::FocusTree => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.focus = Focus::Tree;
+                }
+            }
+            Message::SelectAllSearchText => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.search_area.select_all();
                 }
             }
         }
@@ -137,31 +153,73 @@ impl App {
         }
     }
 
-    pub fn handle_event(&self) -> Result<Option<Message>> {
+    pub fn handle_event(&mut self) -> Result<Option<Message>> {
         if event::poll(Duration::from_millis(150))? {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') => Ok(Some(Message::Quit)),
-                    KeyCode::Char('j') | KeyCode::Down => Ok(Some(Message::SelectNext)),
-                    KeyCode::Char('k') | KeyCode::Up => Ok(Some(Message::SelectPrev)),
-                    KeyCode::Char(' ') | KeyCode::Enter => Ok(Some(Message::ToggleOpenOnSelected)),
-                    KeyCode::Char('s') => Ok(Some(Message::GoToSubtree)),
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        Ok(Some(Message::PageDown))
+            let evt = event::read()?;
+            if search_focused(&self.app_state) {
+                if let Event::Key(key) = &evt
+                    && key.kind == KeyEventKind::Press
+                {
+                    match key.code {
+                        KeyCode::Esc => return Ok(Some(Message::FocusTree)),
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(Some(Message::SelectAllSearchText));
+                        }
+                        _ => {
+                            if let AppState::Running(state) = &mut self.app_state {
+                                if state.focus == Focus::Search {
+                                    state.search_area.input(evt);
+                                }
+                            }
+                        }
                     }
-                    KeyCode::PageDown => Ok(Some(Message::PageDown)),
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        Ok(Some(Message::PageUp))
+                } else if let AppState::Running(state) = &mut self.app_state {
+                    if state.focus == Focus::Search {
+                        state.search_area.input(evt);
                     }
-                    KeyCode::PageUp => Ok(Some(Message::PageUp)),
+                }
+                Ok(None)
+            } else if dep_tree_focused(&self.app_state) {
+                match &evt {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Char('q') => Ok(Some(Message::Quit)),
+                        KeyCode::Char('j') | KeyCode::Down => Ok(Some(Message::SelectNext)),
+                        KeyCode::Char('k') | KeyCode::Up => Ok(Some(Message::SelectPrev)),
+                        KeyCode::Char(' ') | KeyCode::Enter => {
+                            Ok(Some(Message::ToggleOpenOnSelected))
+                        }
+                        KeyCode::Char('s') => Ok(Some(Message::GoToSubtree)),
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            Ok(Some(Message::PageDown))
+                        }
+                        KeyCode::PageDown => Ok(Some(Message::PageDown)),
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            Ok(Some(Message::PageUp))
+                        }
+                        KeyCode::PageUp => Ok(Some(Message::PageUp)),
+                        KeyCode::Char('/') => Ok(Some(Message::FocusSearch)),
+                        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            Ok(Some(Message::FocusSearch))
+                        }
+                        _ => Ok(None),
+                    },
                     _ => Ok(None),
-                },
-                _ => Ok(None),
+                }
+            } else {
+                Ok(None)
             }
         } else {
             Ok(None)
         }
     }
+}
+
+fn dep_tree_focused(app_state: &AppState) -> bool {
+    matches!(app_state, AppState::Running(state) if state.focus == Focus::Tree)
+}
+
+fn search_focused(app_state: &AppState) -> bool {
+    matches!(app_state, AppState::Running(state) if state.focus == Focus::Search)
 }
 
 fn render_main_view(frame: &mut Frame<'_>, state: &mut RunningState) {
@@ -194,10 +252,10 @@ fn render_main_view(frame: &mut Frame<'_>, state: &mut RunningState) {
 }
 
 fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
-    let details = if state.view_state.selected().is_empty() {
+    let details = if state.tree_state.selected().is_empty() {
         vec![Line::from("Select a dependency to view its details")]
     } else {
-        let selected_idx = state.view_state.selected()[state.view_state.selected().len() - 1];
+        let selected_idx = state.tree_state.selected()[state.tree_state.selected().len() - 1];
         let relationships = state
             .graph
             .adj_node_relationships(selected_idx)
@@ -209,7 +267,7 @@ fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
         all_details.push(Line::from(format!(
             "Tree ID: {:?}",
             state
-                .view_state
+                .tree_state
                 .selected()
                 .into_iter()
                 .map(|i| i.to_string())
@@ -219,7 +277,7 @@ fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
         if let Some(subtree_node) = state
             .graph
             .adj_nodes_with_relationship(
-                state.view_state.selected()[state.view_state.selected().len() - 1],
+                state.tree_state.selected()[state.tree_state.selected().len() - 1],
                 Relationship::SubtreeFoundHere,
             )
             .next()
@@ -260,13 +318,35 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            // Constraint::Length(3),
+            Constraint::Length(3),
             Constraint::Fill(1),
         ])
         .split(area);
 
+    if state.focus == Focus::Tree {
+        // hide the cursor
+        state
+            .search_area
+            .set_cursor_style(Style::default().bg(Color::default()));
+
+        if state.tree_state.selected().is_empty() {
+            state.tree_state.select_first();
+        }
+    } else {
+        state
+            .search_area
+            .set_cursor_style(Style::default().bg(Color::White));
+        state.tree_state.select(Vec::new());
+    }
+
+    state
+        .search_area
+        .set_block(Block::bordered().title("Search"));
+
+    frame.render_widget(&state.search_area, split[0]);
+
     let mut path_display = state
-        .view_state
+        .tree_state
         .selected()
         .iter()
         .map(|i| state.graph.get_node(*i))
@@ -284,7 +364,7 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
     frame.render_widget(
         Paragraph::new(path_display)
             .block(Block::bordered().title("Selected Path (a = artifact, p = project)")),
-        split[0],
+        split[1],
     );
 
     let tg = state.graph.traversable_from_root();
@@ -299,41 +379,43 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
                 .title(state.graph.root_name()),
         );
 
-    if state.view_state.selected().is_empty() {
-        if !state.view_state.select_first() {
-            debug!("first not selected");
-        }
-    }
-
-    frame.render_stateful_widget(tree, split[1], &mut state.view_state);
+    frame.render_stateful_widget(tree, split[2], &mut state.tree_state);
 }
 
 fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
-    let mut context_menu_text = String::from("j/↓ - select next, k/↑ - select previous");
+    let menu = match state.focus {
+        Focus::Search => String::from("Esc - focus depenency tree, ctrl-a - select all"),
+        Focus::Tree => {
+            let mut context_menu_text = String::from(
+                "q - quit, /|ctrl-f - search, j|↓ - select next, k|↑ - select previous",
+            );
 
-    if !state.view_state.selected().is_empty() {
-        let graph = &state.graph;
-        let selected = state.view_state.selected()[state.view_state.selected().len() - 1];
+            if !state.tree_state.selected().is_empty() {
+                let graph = &state.graph;
+                let selected = state.tree_state.selected()[state.tree_state.selected().len() - 1];
 
-        if graph.node_has_dependencies(selected) {
-            context_menu_text += ", space/⏎ - toggle open on selected"
+                if graph.node_has_dependencies(selected) {
+                    context_menu_text += ", space|⏎ - toggle open on selected"
+                }
+
+                if state
+                    .graph
+                    .adj_nodes_with_relationship(
+                        state.tree_state.selected()[state.tree_state.selected().len() - 1],
+                        Relationship::SubtreeFoundHere,
+                    )
+                    .next()
+                    .is_some()
+                {
+                    context_menu_text += ", s - go to sub tree"
+                }
+            }
+            context_menu_text
         }
-
-        if state
-            .graph
-            .adj_nodes_with_relationship(
-                state.view_state.selected()[state.view_state.selected().len() - 1],
-                Relationship::SubtreeFoundHere,
-            )
-            .next()
-            .is_some()
-        {
-            context_menu_text += ", s - go to sub tree"
-        }
-    }
+    };
 
     frame.render_widget(
-        Paragraph::new(context_menu_text).block(Block::bordered().title("Context Menu")),
+        Paragraph::new(menu).block(Block::bordered().title("Context Menu")),
         area,
     );
 }
@@ -387,6 +469,9 @@ pub enum Message {
     GoToSubtree,
     PageDown,
     PageUp,
+    FocusSearch,
+    FocusTree,
+    SelectAllSearchText,
 }
 
 enum LoadState {
@@ -396,14 +481,25 @@ enum LoadState {
 
 struct RunningState {
     graph: DependencyGraph,
-    view_state: TreeState<NodeIdx>,
+    tree_state: TreeState<NodeIdx>,
+    search_area: TextArea<'static>,
+    focus: Focus,
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
+enum Focus {
+    Search,
+    #[default]
+    Tree,
 }
 
 impl RunningState {
     fn new(graph: DependencyGraph) -> Self {
         Self {
             graph,
-            view_state: TreeState::default(),
+            tree_state: TreeState::default(),
+            search_area: TextArea::default(),
+            focus: Focus::default(),
         }
     }
 }
