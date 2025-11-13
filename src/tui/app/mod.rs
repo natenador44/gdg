@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::mpsc::{Receiver, channel},
     thread,
@@ -10,19 +9,19 @@ use anyhow::Result;
 use itertools::Itertools;
 use ratatui::{
     Frame,
-    crossterm::event::{self, Event, KeyCode, KeyEventKind},
+    crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Paragraph},
 };
-use tracing::{debug, info};
+use tracing::debug;
 use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 use crate::{
     graph::{
-        Dependency, DependencyGraph, DependencyId, DependencyStatus, Identifier, Node, NodeIdx,
-        Relationship, TraversableGraph, create_graph,
+        DependencyGraph, DependencyId, Identifier, NodeIdx, Relationship, TraversableGraph,
+        create_graph,
     },
     input,
 };
@@ -97,6 +96,20 @@ impl App {
                     state.view_state.scroll_selected_into_view();
                 }
             }
+            Message::PageDown => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state
+                        .view_state
+                        .select_relative(|mut current| current.get_or_insert(0).saturating_add(25));
+                }
+            }
+            Message::PageUp => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state
+                        .view_state
+                        .select_relative(|mut current| current.get_or_insert(0).saturating_sub(25));
+                }
+            }
         }
     }
 
@@ -115,7 +128,7 @@ impl App {
                     frame.render_widget(Paragraph::new("Loading dependency graph.."), frame.area());
                 }
             }
-            AppState::Running(state) => render_dependency_graph_view(frame, state),
+            AppState::Running(state) => render_main_view(frame, state),
             AppState::Error(e) => frame.render_widget(
                 Paragraph::new(format!("an error occurred: {e}")),
                 frame.area(),
@@ -133,6 +146,14 @@ impl App {
                     KeyCode::Char('k') | KeyCode::Up => Ok(Some(Message::SelectPrev)),
                     KeyCode::Char(' ') | KeyCode::Enter => Ok(Some(Message::ToggleOpenOnSelected)),
                     KeyCode::Char('s') => Ok(Some(Message::GoToSubtree)),
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Ok(Some(Message::PageDown))
+                    }
+                    KeyCode::PageDown => Ok(Some(Message::PageDown)),
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        Ok(Some(Message::PageUp))
+                    }
+                    KeyCode::PageUp => Ok(Some(Message::PageUp)),
                     _ => Ok(None),
                 },
                 _ => Ok(None),
@@ -143,7 +164,7 @@ impl App {
     }
 }
 
-fn render_dependency_graph_view(frame: &mut Frame<'_>, state: &mut RunningState) {
+fn render_main_view(frame: &mut Frame<'_>, state: &mut RunningState) {
     /*
     * --- title ------------------------------------
     * | [ search ] |   selected dep details | help |
@@ -163,29 +184,16 @@ fn render_dependency_graph_view(frame: &mut Frame<'_>, state: &mut RunningState)
     // skipping the help menu for now since that only shows up conditionally
     let main = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(stage[0]);
 
-    let tg = state.graph.traversable_from_root();
-    let roots = build_tree_item_for_parent(&tg);
+    render_dependency_graph_view(frame, state, main[0]);
+    render_details_view(frame, state, main[1]);
 
-    let tree = Tree::new(&roots)
-        .expect("all identifiers are unique")
-        .highlight_style(Style::new().bg(Color::Blue))
-        .block(
-            Block::new()
-                .borders(Borders::all())
-                .title(state.graph.root_name()),
-        );
+    render_context_menu(frame, state, stage[1]);
+}
 
-    if state.view_state.selected().is_empty() {
-        if !state.view_state.select_first() {
-            debug!("first not selected");
-        }
-    }
-
-    frame.render_stateful_widget(tree, main[0], &mut state.view_state);
-
+fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
     let details = if state.view_state.selected().is_empty() {
         vec![Line::from("Select a dependency to view its details")]
     } else {
@@ -243,10 +251,61 @@ fn render_dependency_graph_view(frame: &mut Frame<'_>, state: &mut RunningState)
 
     frame.render_widget(
         Paragraph::new(details).block(Block::new().borders(Borders::all()).title("Details")),
-        main[1],
+        area,
+    );
+}
+
+fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, area: Rect) {
+    let split = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            // Constraint::Length(3),
+            Constraint::Fill(1),
+        ])
+        .split(area);
+
+    let mut path_display = state
+        .view_state
+        .selected()
+        .iter()
+        .map(|i| state.graph.get_node(*i))
+        .map(|n| match &n.dependency.id {
+            DependencyId::Project(n) => format!("{n}(p)"),
+            DependencyId::Artifact(artifact) => format!("{}(a)", artifact.name),
+        })
+        .join(" -> ");
+
+    let view_size = area.as_size().width as usize - 4;
+    if path_display.chars().count() > view_size {
+        path_display = format!("..{}", &path_display[path_display.len() - view_size..])
+    }
+
+    frame.render_widget(
+        Paragraph::new(path_display)
+            .block(Block::bordered().title("Selected Path (a = artifact, p = project)")),
+        split[0],
     );
 
-    render_context_menu(frame, state, stage[1]);
+    let tg = state.graph.traversable_from_root();
+    let roots = build_tree_item_for_parent(&tg);
+
+    let tree = Tree::new(&roots)
+        .expect("all identifiers are unique")
+        .highlight_style(Style::new().bg(Color::Blue))
+        .block(
+            Block::new()
+                .borders(Borders::all())
+                .title(state.graph.root_name()),
+        );
+
+    if state.view_state.selected().is_empty() {
+        if !state.view_state.select_first() {
+            debug!("first not selected");
+        }
+    }
+
+    frame.render_stateful_widget(tree, split[1], &mut state.view_state);
 }
 
 fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
@@ -326,6 +385,8 @@ pub enum Message {
     SelectPrev,
     ToggleOpenOnSelected,
     GoToSubtree,
+    PageDown,
+    PageUp,
 }
 
 enum LoadState {
@@ -336,8 +397,6 @@ enum LoadState {
 struct RunningState {
     graph: DependencyGraph,
     view_state: TreeState<NodeIdx>,
-    selected_dep: Option<NodeIdx>,
-    search_text: Option<String>,
 }
 
 impl RunningState {
@@ -345,8 +404,6 @@ impl RunningState {
         Self {
             graph,
             view_state: TreeState::default(),
-            selected_dep: None,
-            search_text: None,
         }
     }
 }

@@ -3,9 +3,8 @@ use std::{cmp::Ordering, collections::HashMap, hash::Hash, io, path::Path, rc::R
 use crate::{parser::Parser, tokens::Token};
 use anyhow::{Result, anyhow};
 use petgraph::{
-    Directed,
     dot::{Config, Dot},
-    graph::{DiGraph, Edges, NodeIndex},
+    graph::{DiGraph, NodeIndex},
     visit::EdgeRef,
 };
 
@@ -94,19 +93,6 @@ pub struct TraversableGraph<'a> {
     graph: &'a GraphInner,
 }
 
-pub struct Children<'a>(&'a GraphInner, Edges<'a, Relationship, Directed>);
-
-impl<'a> Iterator for Children<'a> {
-    type Item = Node<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.1.next().map(|e| Node {
-            dependency: &self.0[e.target()],
-            idx: NodeIdx(e.target()),
-        })
-    }
-}
-
 pub struct Node<'a> {
     pub dependency: &'a Dependency,
     pub idx: NodeIdx,
@@ -158,6 +144,8 @@ impl DependencyGraph {
             graph: &self.inner,
         }
     }
+
+    #[allow(unused)]
     pub fn write_to_file(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let dot = Dot::with_attr_getters(
             &self.inner,

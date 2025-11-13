@@ -1,4 +1,4 @@
-use crate::{args::Args, graph::create_graph};
+use crate::args::Args;
 use anyhow::Result;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 

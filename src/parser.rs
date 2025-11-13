@@ -149,14 +149,6 @@ impl Parser {
             }))
         }
     }
-
-    pub fn remaining(&self) -> &str {
-        if self.is_consumed() {
-            ""
-        } else {
-            &self.original_text[self.pos..]
-        }
-    }
 }
 
 fn parse_ident(c: char, chars: &mut Chars) -> String {
