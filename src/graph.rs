@@ -13,13 +13,14 @@ pub type Identifier = Arc<str>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Relationship {
-    DependsOn,
+    Dependency,
     Overrides,
     OverriddenBy,
     SubtreeFoundHere,
     ContainsSubtreeOf,
     ConstrainedBy,
     Constrains,
+    Dependent,
 }
 
 type GraphInner = DiGraph<Dependency, Relationship>;
@@ -63,12 +64,16 @@ impl DependencyGraph {
     }
 
     pub fn node_has_dependencies(&self, idx: NodeIdx) -> bool {
-        self.children_with_relationship(idx, Relationship::DependsOn)
+        self.adj_nodes_with_relationship(idx, Relationship::Dependency)
             .next()
             .is_some()
     }
 
-    pub fn children_with_relationship(
+    pub fn adj_node_relationships(&self, idx: NodeIdx) -> impl Iterator<Item = Relationship> {
+        self.inner.edges(idx.0).map(|e| *e.weight())
+    }
+
+    pub fn adj_nodes_with_relationship(
         &self,
         idx: NodeIdx,
         r: impl HasRelationship,
@@ -107,8 +112,18 @@ pub struct Node<'a> {
     pub idx: NodeIdx,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeIdx(NodeIndex);
+impl std::fmt::Display for NodeIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.index())
+    }
+}
+impl NodeIdx {
+    pub fn is_root(&self) -> bool {
+        self.0.index() == 0
+    }
+}
 
 impl<'a> TraversableGraph<'a> {
     pub fn nodes_with_relationship(
@@ -422,14 +437,17 @@ pub fn create_graph(
                         parents.pop();
                     }
 
-                    graph.add_edge(*parents.last(), dep_idx, Relationship::DependsOn);
+                    graph.add_edge(*parents.last(), dep_idx, Relationship::Dependency);
+                    graph.add_edge(dep_idx, *parents.last(), Relationship::Dependent);
                 }
                 Ordering::Equal => {
-                    graph.add_edge(*parents.last(), dep_idx, Relationship::DependsOn);
+                    graph.add_edge(*parents.last(), dep_idx, Relationship::Dependency);
+                    graph.add_edge(dep_idx, *parents.last(), Relationship::Dependent);
                 }
                 Ordering::Greater => {
                     // if depth is greater, the last_idx is its parent, so make that association
-                    graph.add_edge(potential_parent, dep_idx, Relationship::DependsOn);
+                    graph.add_edge(potential_parent, dep_idx, Relationship::Dependency);
+                    graph.add_edge(dep_idx, potential_parent, Relationship::Dependent);
                     // then officially push last_idx to stack since it is a parent for sure now
                     parents.push(potential_parent);
                 }

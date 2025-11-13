@@ -7,11 +7,13 @@ use std::{
 };
 
 use anyhow::Result;
+use itertools::Itertools;
 use ratatui::{
     Frame,
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
+    text::Line,
     widgets::{Block, Borders, Paragraph},
 };
 use tracing::{debug, info};
@@ -63,14 +65,35 @@ impl App {
             }
             Message::GoToSubtree => {
                 if let AppState::Running(state) = &mut self.app_state {
-                    let selected_idx = state.view_state.selected()[0];
+                    let selected_idx =
+                        state.view_state.selected()[state.view_state.selected().len() - 1];
                     let node = state
                         .graph
-                        .children_with_relationship(selected_idx, Relationship::SubtreeFoundHere)
+                        .adj_nodes_with_relationship(selected_idx, Relationship::SubtreeFoundHere)
                         .next()
                         .expect("subtree relationship found");
 
-                    state.view_state.select(vec![node.idx]);
+                    let mut cur_node_idx = node.idx;
+                    let mut tree_id = vec![node.idx];
+                    while let Some(node) = state
+                        .graph
+                        .adj_nodes_with_relationship(cur_node_idx, Relationship::Dependent)
+                        .next()
+                    {
+                        if node.idx.is_root() {
+                            // the tree doesn't account for root
+                            break;
+                        }
+                        tree_id.push(node.idx);
+                        cur_node_idx = node.idx;
+                    }
+                    tree_id.reverse();
+
+                    for i in 0..tree_id.len() - 1 {
+                        state.view_state.open(tree_id[0..=i].to_vec());
+                    }
+
+                    state.view_state.select(tree_id);
                     state.view_state.scroll_selected_into_view();
                 }
             }
@@ -162,9 +185,64 @@ fn render_dependency_graph_view(frame: &mut Frame<'_>, state: &mut RunningState)
     }
 
     frame.render_stateful_widget(tree, main[0], &mut state.view_state);
+
+    let details = if state.view_state.selected().is_empty() {
+        vec![Line::from("Select a dependency to view its details")]
+    } else {
+        let selected_idx = state.view_state.selected()[state.view_state.selected().len() - 1];
+        let relationships = state
+            .graph
+            .adj_node_relationships(selected_idx)
+            .map(|r| Line::from(format!("{r:?}")))
+            .collect_vec();
+
+        let mut all_details = vec![Line::from(format!("Selected Index: {selected_idx:?}"))];
+        all_details.extend(relationships);
+        all_details.push(Line::from(format!(
+            "Tree ID: {:?}",
+            state
+                .view_state
+                .selected()
+                .into_iter()
+                .map(|i| i.to_string())
+                .join(",")
+        )));
+
+        if let Some(subtree_node) = state
+            .graph
+            .adj_nodes_with_relationship(
+                state.view_state.selected()[state.view_state.selected().len() - 1],
+                Relationship::SubtreeFoundHere,
+            )
+            .next()
+        {
+            let mut subtree_id = vec![subtree_node.idx];
+            let mut cur_idx = subtree_node.idx;
+            while let Some(node) = state
+                .graph
+                .adj_nodes_with_relationship(cur_idx, Relationship::Dependent)
+                .next()
+            {
+                if node.idx.is_root() {
+                    break;
+                }
+                subtree_id.push(node.idx);
+                cur_idx = node.idx;
+            }
+
+            subtree_id.reverse();
+
+            all_details.push(Line::from(format!(
+                "Subtree Tree ID: {}",
+                subtree_id.iter().map(|i| i.to_string()).join(",")
+            )));
+        }
+
+        all_details
+    };
+
     frame.render_widget(
-        Paragraph::new("Dep details go here")
-            .block(Block::new().borders(Borders::all()).title("Details")),
+        Paragraph::new(details).block(Block::new().borders(Borders::all()).title("Details")),
         main[1],
     );
 
@@ -182,12 +260,14 @@ fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
             context_menu_text += ", space/⏎ - toggle open on selected"
         }
 
-        let node = graph.get_node(selected);
-
-        if node
-            .dependency
-            .statuses
-            .contains(&DependencyStatus::SubTreeAlreadyListed)
+        if state
+            .graph
+            .adj_nodes_with_relationship(
+                state.view_state.selected()[state.view_state.selected().len() - 1],
+                Relationship::SubtreeFoundHere,
+            )
+            .next()
+            .is_some()
         {
             context_menu_text += ", s - go to sub tree"
         }
@@ -201,7 +281,7 @@ fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
 
 fn build_tree_item_for_parent<'a>(graph: &TraversableGraph<'a>) -> Vec<TreeItem<'a, NodeIdx>> {
     let mut children = Vec::new();
-    for c in graph.nodes_with_relationship(Relationship::DependsOn) {
+    for c in graph.nodes_with_relationship(Relationship::Dependency) {
         let item = TreeItem::new(
             c.idx,
             c.dependency.id.to_string(),
