@@ -24,6 +24,10 @@ pub enum Token {
     ParenOpen,
     /// )
     ParenClose,
+    /// [
+    SquareOpen,
+    /// ]
+    SquareClose,
     /// '
     SingleQuote,
     /// \
@@ -64,6 +68,8 @@ impl Token {
             Token::Comma => ','.len_utf8(),
             Token::SemiColon => ';'.len_utf8(),
             Token::Indentation => "    ".len(),
+            Token::SquareOpen => '['.len_utf8(),
+            Token::SquareClose => ']'.len_utf8(),
         }
     }
 }
@@ -90,6 +96,8 @@ impl Display for Token {
             Token::Comma => write!(f, ","),
             Token::SemiColon => write!(f, ";"),
             Token::Indentation => write!(f, "    "),
+            Token::SquareOpen => write!(f, "["),
+            Token::SquareClose => write!(f, "]"),
         }
     }
 }

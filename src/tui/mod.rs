@@ -1,15 +1,8 @@
-use std::{ops::Not, path::PathBuf};
+use std::path::PathBuf;
 
-use crate::{
-    graph::DependencyGraph,
-    tui::app::{App, Message},
-};
+use crate::tui::app::{App, Message};
 use anyhow::Result;
-use ratatui::{
-    DefaultTerminal, Frame,
-    crossterm::event::{self, Event, KeyCode, KeyEventKind},
-};
-use tracing::debug;
+use ratatui::DefaultTerminal;
 
 mod app;
 

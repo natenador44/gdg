@@ -201,6 +201,8 @@ fn identify_non_indentation_token(next: char, chars: &mut Chars) -> Result<Optio
         ':' => Token::Colon,
         '(' => Token::ParenOpen,
         ')' => Token::ParenClose,
+        '[' => Token::SquareOpen,
+        ']' => Token::SquareClose,
         '*' => Token::Asterisk,
         '>' => Token::RightCaret,
         '\'' => Token::SingleQuote,

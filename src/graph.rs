@@ -389,8 +389,15 @@ pub fn create_graph(
                         .iter()
                         .any(|s| matches!(s, DependencyStatus::Override(_)))
                     {
-                        // this is a guess... but if we've got a "+" in the version, I think gradle is showing the resolution as an override.. check for that, and only add if resolved doesn't already contain the key
-                        if matches!(&dep.id, DependencyId::Artifact(Artifact { version: Some(v), ..}) if v.contains("+"))
+                        // if we go from an ambiguous version (like no version specified or a version with a wildcard [+]),
+                        // then the override just indicates that gradle did some work to resolve the version, and here's what
+                        // the version is
+                        // TODO make versions smarter
+                        if (matches!(&dep.id, DependencyId::Artifact(Artifact { version: Some(v), ..}) if v.contains("+"))
+                            || matches!(
+                                &dep.id,
+                                DependencyId::Artifact(Artifact { version: None, .. })
+                            ))
                             && !resolved.contains_key(&key)
                         {
                             resolved.insert(key.clone(), dep_idx);
@@ -432,11 +439,14 @@ pub fn create_graph(
     }
 
     for (dep_key, dep_idx) in overrides {
-        let resolved_idx = *resolved
-            .get(&dep_key)
-            .expect(&format!("resolved should contain {dep_key}"));
-        graph.add_edge(dep_idx, resolved_idx, Relationship::OverriddenBy);
-        graph.add_edge(resolved_idx, dep_idx, Relationship::Overrides);
+        // overrides aren't necessarily pointing to an original. If no version is specified in the declaration (build.gradle)
+        // but you use something like the spring boot gradle plugin, it will enforce that version and show up as an override
+        // so really, the best way to think about these "overrides" is only that gradle did something to resolve them, not
+        // necessarily that there was a conflict it had to figure out
+        if let Some(resolved_idx) = resolved.get(&dep_key) {
+            graph.add_edge(dep_idx, *resolved_idx, Relationship::OverriddenBy);
+            graph.add_edge(*resolved_idx, dep_idx, Relationship::Overrides);
+        }
     }
 
     Ok(DependencyGraph {
