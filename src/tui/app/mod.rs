@@ -153,6 +153,11 @@ impl App {
                     state.expand_all_nodes = true;
                 }
             }
+            Message::ToggleHelp => {
+                if let AppState::Running(state) = &mut self.app_state {
+                    state.help_menu_showing = !state.help_menu_showing;
+                }
+            }
         }
     }
 
@@ -242,6 +247,7 @@ impl App {
                         }
                         KeyCode::Char('z') => Ok(Some(Message::ExpandAll)),
                         KeyCode::Char('Z') => Ok(Some(Message::CollapseAll)),
+                        KeyCode::Char('?') => Ok(Some(Message::ToggleHelp)),
                         KeyCode::Esc => Ok(Some(Message::ClearSearch)),
                         _ => Ok(None),
                     },
@@ -277,16 +283,58 @@ fn render_main_view(frame: &mut Frame<'_>, state: &mut RunningState) {
         .constraints([Constraint::Fill(1), Constraint::Length(3)])
         .split(frame.area());
 
-    // skipping the help menu for now since that only shows up conditionally
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(stage[0]);
+    if state.help_menu_showing {
+        // skipping the help menu for now since that only shows up conditionally
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(35),
+                Constraint::Percentage(35),
+                Constraint::Percentage(30),
+            ])
+            .split(stage[0]);
 
-    render_dependency_graph_view(frame, state, main[0]);
-    render_details_view(frame, state, main[1]);
+        render_dependency_graph_view(frame, state, main[0]);
+        render_details_view(frame, state, main[1]);
+        render_help_menu(frame, main[2]);
+    } else {
+        // skipping the help menu for now since that only shows up conditionally
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(stage[0]);
+
+        render_dependency_graph_view(frame, state, main[0]);
+        render_details_view(frame, state, main[1]);
+    }
 
     render_context_menu(frame, state, stage[1]);
+}
+
+fn render_help_menu(frame: &mut Frame<'_>, area: Rect) {
+    let lines = vec![
+        Line::from("**Dependency Tree View**"),
+        Line::from("j OR ↓ => select next"),
+        Line::from("k OR ↑ => select previous"),
+        Line::from("ctrl u OR PgUp => Go up a page"),
+        Line::from("ctrl u OR PgDown => Go down a page"),
+        Line::from("z => expand all"),
+        Line::from("Z => collapse all"),
+        Line::from("/ OR ctrl f => search"),
+        Line::from("? => toggle help menu"),
+        Line::from("q => quit"),
+        Line::from(""),
+        Line::from("**Search**"),
+        Line::from("⏎ => apply text filter"),
+        Line::from("ctrl a => select all text in filter"),
+        Line::from("Esc (when search is empty) => focus dependency tree"),
+        Line::from("Esc (when search is not empty) => clear filter"),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title("Help")),
+        area,
+    );
 }
 
 fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Rect) {
@@ -497,9 +545,7 @@ fn render_context_menu(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
             search_menu
         }
         Focus::Tree => {
-            let mut context_menu_text = String::from(
-                "q => quit, /|ctrl f => search, j|↓ => select next, k|↑ => select previous, z => expand all, Z => collapse all",
-            );
+            let mut context_menu_text = String::from("j|↓ => select next, k|↑ => select previous");
 
             if !state.tree_state.selected().is_empty() {
                 let graph = &state.graph;
@@ -622,6 +668,7 @@ pub enum Message {
     ApplySearch,
     CollapseAll,
     ExpandAll,
+    ToggleHelp,
 }
 
 enum LoadState {
@@ -635,6 +682,7 @@ struct RunningState {
     search_area: TextArea<'static>,
     focus: Focus,
     expand_all_nodes: bool,
+    help_menu_showing: bool,
 }
 
 #[derive(Default, PartialEq, Eq, Clone, Copy, Debug)]
@@ -652,6 +700,7 @@ impl RunningState {
             search_area: TextArea::default(),
             focus: Focus::default(),
             expand_all_nodes: false,
+            help_menu_showing: false,
         }
     }
 }
