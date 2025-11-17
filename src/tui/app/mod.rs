@@ -20,8 +20,8 @@ use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 use crate::{
     graph::{
-        DependencyGraph, DependencyId, Identifier, NodeIdx, Relationship, TraversableGraph,
-        create_graph,
+        DependencyGraph, DependencyId, DependencyStatus, Identifier, NodeIdx, Override,
+        Relationship, TraversableGraph, create_graph,
     },
     input,
 };
@@ -294,53 +294,69 @@ fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
         vec![Line::from("Select a dependency to view its details")]
     } else {
         let selected_idx = state.tree_state.selected()[state.tree_state.selected().len() - 1];
-        let relationships = state
+
+        let mut all_details = vec![];
+
+        let contains_subtree_of_count = state
             .graph
-            .adj_node_relationships(selected_idx)
-            .map(|r| Line::from(format!("{r:?}")))
-            .collect_vec();
-
-        let mut all_details = vec![Line::from(format!("Selected Index: {selected_idx:?}"))];
-        all_details.extend(relationships);
-        all_details.push(Line::from(format!(
-            "Tree ID: {:?}",
-            state
-                .tree_state
-                .selected()
-                .into_iter()
-                .map(|i| i.to_string())
-                .join(",")
-        )));
-
-        if let Some(subtree_node) = state
-            .graph
-            .adj_nodes_with_relationship(
-                state.tree_state.selected()[state.tree_state.selected().len() - 1],
-                Relationship::SubtreeFoundHere,
-            )
-            .next()
-        {
-            let mut subtree_id = vec![subtree_node.idx];
-            let mut cur_idx = subtree_node.idx;
-            while let Some(node) = state
-                .graph
-                .adj_nodes_with_relationship(cur_idx, Relationship::Dependent)
-                .next()
-            {
-                if node.idx.is_root() {
-                    break;
-                }
-                subtree_id.push(node.idx);
-                cur_idx = node.idx;
-            }
-
-            subtree_id.reverse();
-
+            .adj_nodes_with_relationship(selected_idx, Relationship::ContainsSubtreeOf)
+            .count();
+        if contains_subtree_of_count > 0 {
             all_details.push(Line::from(format!(
-                "Subtree Tree ID: {}",
-                subtree_id.iter().map(|i| i.to_string()).join(",")
+                "Contains the sub-tree of {contains_subtree_of_count} other dependencies"
             )));
         }
+
+        if state
+            .graph
+            .adj_nodes_with_relationship(selected_idx, Relationship::SubtreeFoundHere)
+            .next()
+            .is_some()
+        {
+            all_details.push(Line::from(
+                "The sub-tree of this dependency is listed elsewhere (press 's' to go there)",
+            ));
+        }
+
+        if let Some(n) = state
+            .graph
+            .adj_nodes_with_relationship(selected_idx, Relationship::OverriddenBy)
+            .next()
+        {
+            if let Some(DependencyStatus::Override(o)) = n
+                .dependency
+                .statuses
+                .iter()
+                .find(|s| matches!(s, DependencyStatus::Override(_)))
+            {
+                let resolved_value = match o {
+                    Override::Version(v) => v,
+                    Override::Project(n) => n,
+                };
+
+                all_details.extend([
+                    Line::from("This depenendency's version was resolved by gradle"),
+                    Line::from(format!("- {} -> {}", n.dependency.id, resolved_value)),
+                ]);
+            }
+        }
+
+        all_details.push(Line::from("Dependent: "));
+        all_details.extend(
+            state
+                .graph
+                .adj_nodes_with_relationship(selected_idx, Relationship::Dependent)
+                .map(|n| Line::from(format!("- {}", n.dependency.id))),
+        );
+
+        all_details.push(Line::from("Dependencies: "));
+
+        all_details.extend(
+            state
+                .graph
+                .adj_nodes_with_relationship(selected_idx, Relationship::Dependency)
+                .map(|n| Line::from(format!("- {}", n.dependency.id))),
+        );
 
         all_details
     };
