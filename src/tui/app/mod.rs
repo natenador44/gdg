@@ -341,6 +341,36 @@ fn render_details_view(frame: &mut Frame<'_>, state: &mut RunningState, area: Re
             }
         }
 
+        for node in state
+            .graph
+            .adj_nodes_with_relationship(selected_idx, Relationship::ConstrainedBy)
+        {
+            all_details.push(Line::from(format!(
+                "This dependency is constrained by {}",
+                node.dependency.id
+            )));
+        }
+
+        if state
+            .graph
+            .get_node(selected_idx)
+            .dependency
+            .statuses
+            .contains(&DependencyStatus::Constraint)
+        {
+            all_details.push(Line::from("This is a constraint, not a dependency"));
+        }
+
+        for node in state
+            .graph
+            .adj_nodes_with_relationship(selected_idx, Relationship::Constrains)
+        {
+            all_details.push(Line::from(format!(
+                "This constaint applies to {}",
+                node.dependency.id
+            )));
+        }
+
         all_details.push(Line::from("Dependent: "));
         all_details.extend(
             state
