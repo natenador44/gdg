@@ -320,6 +320,7 @@ fn render_help_menu(frame: &mut Frame<'_>, area: Rect) {
         Line::from("ctrl u OR PgDown => Go down a page"),
         Line::from("z => expand all"),
         Line::from("Z => collapse all"),
+        Line::from("Esc => clear current search filter"),
         Line::from("/ OR ctrl f => search"),
         Line::from("? => toggle help menu"),
         Line::from("q => quit"),
@@ -523,10 +524,26 @@ fn render_dependency_graph_view(frame: &mut Frame, state: &mut RunningState, are
     frame.render_stateful_widget(tree, split[2], &mut state.tree_state);
 }
 
-fn open_all_items(state: &mut TreeState<NodeIdx>, items: &[TreeItem<'_, NodeIdx>]) {
-    for item in items {
-        state.open(vec![*item.identifier()]);
+fn open_all_items(state: &mut TreeState<NodeIdx>, top_level_items: &[TreeItem<'_, NodeIdx>]) {
+    for item in top_level_items {
+        open_tree_item(state, &[], item);
     }
+}
+
+fn open_tree_item(
+    state: &mut TreeState<NodeIdx>,
+    parents: &[NodeIdx],
+    item: &TreeItem<'_, NodeIdx>,
+) {
+    let mut cur_id = Vec::with_capacity(parents.len() + 1);
+    cur_id.extend(parents);
+    cur_id.push(*item.identifier());
+
+    for child in item.children() {
+        open_tree_item(state, &cur_id, child);
+    }
+
+    state.open(cur_id);
 }
 
 fn close_all_items(state: &mut TreeState<NodeIdx>) {
